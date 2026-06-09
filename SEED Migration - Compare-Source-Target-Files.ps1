@@ -34,6 +34,8 @@ if ($PSVersion -gt 5) {
 
 Write-Host "PowerShell version: $PSVersion (Windows PowerShell)" -ForegroundColor Green
 
+# Record script start time for elapsed-time reporting
+$ScriptStartTime = Get-Date
 # ============================================================
 # HELPER - Extract path from SharePoint hyperlink
 # ============================================================
@@ -337,7 +339,9 @@ try {
 
         $SourceFiles += [PSCustomObject]@{
             FileName = $file.Name
+            Type = 'file'
             RelativePath = $relPath
+            SourcePath = $file.FullName
             FullPath = $file.FullName
             SizeBytes = $file.Length
             SizeMB = [math]::Round($file.Length / 1MB, 2)
@@ -350,6 +354,7 @@ try {
             DateMatch = $null
             TargetOwner = $null
             OwnerMatch = $null
+            DestinationPath = $null
         }
     }
     
@@ -539,6 +544,7 @@ try {
         return $PartitionCache[$partId]
     }
 
+    $siteUri = [uri]$SiteUrl
     foreach ($srcFile in $SourceFiles) {
         $srcRelNorm = Normalize-RelPath $srcFile.RelativePath
         $partId = Get-PartitionId -key $srcRelNorm -numPartitions $numPartitions -md5 $md5
@@ -550,6 +556,10 @@ try {
             $srcFile.SizeMatch = ($srcFile.SizeBytes -eq $targetInfo.Size)
             $srcFile.TargetModified = $targetInfo.Modified
             $srcFile.TargetOwner = $targetInfo.Owner
+            if ($targetInfo.Path) {
+                if ($targetInfo.Path -match '^https?://') { $srcFile.DestinationPath = $targetInfo.Path }
+                else { $srcFile.DestinationPath = "$($siteUri.Scheme)://$($siteUri.Host)$($targetInfo.Path)" }
+            } else { $srcFile.DestinationPath = $null }
             $srcFile.OwnerMatch = Test-OwnerMatch -SourceOwner $srcFile.SourceOwner -TargetOwner $targetInfo.Owner
             if ($targetInfo.Modified) {
                 $timeDiff = [Math]::Abs(($srcFile.Modified - $targetInfo.Modified).TotalSeconds)
@@ -566,6 +576,65 @@ try {
     foreach ($partId in $cachedIds) { Save-PartitionMap $partId $PartitionCache[$partId] }
 
     Write-Host "Matched $MatchedCount file(s)" -ForegroundColor Green
+
+    # Build per-folder summary rows (Type = 'folder')
+    try {
+        $baseServer = $null
+        if ($TargetServerRelativeUrl) { $baseServer = $TargetServerRelativeUrl } else { $baseServer = $TargetList.RootFolder.ServerRelativeUrl }
+        $baseServer = $baseServer.TrimEnd('/')
+
+        $sourceDirs = Get-ChildItem -Path $SourcePath -Recurse -Directory -Force -ErrorAction SilentlyContinue
+        foreach ($dir in $sourceDirs) {
+            $rel = $dir.FullName.Substring($SourcePath.Length).TrimStart('\','/') -replace '\\','/'
+            $relNorm = Normalize-RelPath $rel
+
+                # Only consider files directly inside this folder (do not include files in subfolders)
+                $filesInFolder = @($SourceFiles | Where-Object { $_.RelativePath } | Where-Object {
+                    $fr = $_.RelativePath.ToLower()
+                    if ([string]::IsNullOrWhiteSpace($relNorm)) {
+                        # If folder relative path is empty (shouldn't happen for subfolders), treat files without any subpath
+                        return -not ($fr.Contains('/'))
+                    }
+                    if ($fr.StartsWith("$relNorm/")) {
+                        $suffix = $fr.Substring($relNorm.Length).TrimStart('/')
+                        return -not ($suffix.Contains('/'))
+                    }
+                    return $false
+                }
+                )
+                $totalFiles = $filesInFolder.Count
+                if ($totalFiles -eq 0) { continue }
+                $missing = @($filesInFolder | Where-Object { ($_.Type -eq 'file') -and ($_.Exists_InTarget -ne $true) }).Count
+
+            if ($missing -eq 0) { $status = 'Migrated' } else { $status = "Failed - $missing" }
+
+            $destUrl = "$($siteUri.Scheme)://$($siteUri.Host)$baseServer"
+            if ($relNorm) { $destUrl = "$destUrl/$relNorm" }
+
+            $folderRec = [PSCustomObject]@{
+                FileName = $dir.Name
+                Type = 'folder'
+                RelativePath = $rel
+                SourcePath = $dir.FullName
+                FullPath = $dir.FullName
+                DestinationPath = $destUrl
+                Exists_InTarget = $status
+                SizeBytes = $null
+                TargetSize = $null
+                SizeMatch = $null
+                Modified = $null
+                TargetModified = $null
+                DateMatch = $null
+                SourceOwner = $null
+                TargetOwner = $null
+                OwnerMatch = $null
+            }
+
+            $SourceFiles += $folderRec
+        }
+    } catch {
+        # Non-fatal: continue without folder rows
+    }
 
 } catch {
     Write-Host "ERROR scanning target:" -ForegroundColor Red
@@ -612,6 +681,22 @@ if ($FilesMatched.Count -gt 0) {
     Write-Host "  Date differs:        $($FilesDateMismatch.Count)" -ForegroundColor Yellow
 }
 
+# Show total elapsed time for the comparison (terminal only)
+try {
+    $elapsed = (Get-Date) - $ScriptStartTime
+    if ($elapsed.TotalHours -ge 1) {
+        $elapsedStr = "{0}h {1}m {2}s" -f [int]$elapsed.TotalHours, $elapsed.Minutes, $elapsed.Seconds
+    } elseif ($elapsed.TotalMinutes -ge 1) {
+        $elapsedStr = "{0}m {1}s" -f [int]$elapsed.TotalMinutes, $elapsed.Seconds
+    } else {
+        $elapsedStr = "{0}s" -f $elapsed.Seconds
+    }
+    Write-Host ""
+    Write-Host "Time elapsed: $elapsedStr" -ForegroundColor Cyan
+} catch {
+    # Non-fatal: ignore if timing fails
+}
+
 # ============================================================
 # STEP 8 - Export CSV
 # ============================================================
@@ -624,8 +709,11 @@ Write-Host "Exporting to CSV..." -ForegroundColor Cyan
 try {
     $SourceFiles | Select-Object `
         FileName,
+        @{Name='Type'; Expression={$_.Type}},
+        @{Name='SourcePath'; Expression={$_.SourcePath}},
+        @{Name='DestinationPath'; Expression={$_.DestinationPath}},
         RelativePath,
-        @{Name='Exists_InTarget'; Expression={if ($_.Exists_InTarget) { 'YES' } else { 'NO' }}},
+        @{Name='Exists_InTarget'; Expression={ if ($_.Type -eq 'folder') { $_.Exists_InTarget } else { if ($_.Exists_InTarget) { 'YES' } else { 'NO' } } }},
         @{Name='SourceSize_Bytes'; Expression={$_.SizeBytes}},
         @{Name='TargetSize_Bytes'; Expression={$_.TargetSize}},
         @{Name='SizeMatch'; Expression={if ($_.SizeMatch -eq $true) { 'YES' } elseif ($_.SizeMatch -eq $false) { 'NO' } else { 'N/A' }}},
