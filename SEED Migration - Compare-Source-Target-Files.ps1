@@ -134,10 +134,61 @@ if ([string]::IsNullOrWhiteSpace($SourcePath)) {
     # Try to use a Windows Forms folder-picker dialog; fall back to Read-Host if unavailable.
     try {
         Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
+
         $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
         $folderDialog.Description = "Select local source folder"
         $folderDialog.ShowNewFolderButton = $true
-        $dialogResult = $folderDialog.ShowDialog()
+
+        # First try to show the dialog owned by the host main window (works in PowerShell ISE)
+        $dialogResult = $null
+        try {
+            $mainHandle = [System.Diagnostics.Process]::GetCurrentProcess().MainWindowHandle
+        } catch {
+            $mainHandle = [IntPtr]::Zero
+        }
+
+        if ($mainHandle -and $mainHandle -ne [IntPtr]::Zero) {
+            try {
+                $code = @"
+using System;
+using System.Windows.Forms;
+public class PSWindowWrapper : IWin32Window {
+    private IntPtr _hwnd;
+    public PSWindowWrapper(IntPtr handle) { _hwnd = handle; }
+    public IntPtr Handle { get { return _hwnd; } }
+}
+"@
+                Add-Type -TypeDefinition $code -Language CSharp -ErrorAction Stop
+                $wrapper = New-Object PSWindowWrapper($mainHandle)
+                $dialogResult = $folderDialog.ShowDialog($wrapper)
+            } catch {
+                # Fallback: invisible top-most owner form
+                $ownerForm = New-Object System.Windows.Forms.Form
+                $ownerForm.TopMost = $true
+                $ownerForm.ShowInTaskbar = $false
+                $ownerForm.FormBorderStyle = 'None'
+                $ownerForm.StartPosition = 'Manual'
+                $ownerForm.Size = New-Object System.Drawing.Size(0,0)
+                $ownerForm.Location = New-Object System.Drawing.Point(-2000,-2000)
+                $ownerForm.Opacity = 0
+                $ownerForm.Show()
+                try { $dialogResult = $folderDialog.ShowDialog($ownerForm) } finally { try { $ownerForm.Close(); $ownerForm.Dispose() } catch {} }
+            }
+        } else {
+            # No main window handle; use invisible owner form
+            $ownerForm = New-Object System.Windows.Forms.Form
+            $ownerForm.TopMost = $true
+            $ownerForm.ShowInTaskbar = $false
+            $ownerForm.FormBorderStyle = 'None'
+            $ownerForm.StartPosition = 'Manual'
+            $ownerForm.Size = New-Object System.Drawing.Size(0,0)
+            $ownerForm.Location = New-Object System.Drawing.Point(-2000,-2000)
+            $ownerForm.Opacity = 0
+            $ownerForm.Show()
+            try { $dialogResult = $folderDialog.ShowDialog($ownerForm) } finally { try { $ownerForm.Close(); $ownerForm.Dispose() } catch {} }
+        }
+
         if ($dialogResult -eq [System.Windows.Forms.DialogResult]::OK) {
             $SourcePath = $folderDialog.SelectedPath
         } else {
