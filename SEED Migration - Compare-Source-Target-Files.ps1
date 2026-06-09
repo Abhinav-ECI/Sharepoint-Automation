@@ -350,6 +350,7 @@ try {
             Exists_InTarget = $null
             TargetSize = $null
             SizeMatch = $null
+            SizeMatchStatus = $null
             TargetModified = $null
             DateMatch = $null
             TargetOwner = $null
@@ -554,6 +555,14 @@ try {
             $srcFile.Exists_InTarget = $true
             $srcFile.TargetSize = $targetInfo.Size
             $srcFile.SizeMatch = ($srcFile.SizeBytes -eq $targetInfo.Size)
+            # Determine human-friendly size match status: YES / CHECK (target larger) / CORRUPT (target smaller)
+            try {
+                if ($null -ne $srcFile.SizeBytes -and $null -ne $targetInfo.Size) {
+                    if ($srcFile.SizeBytes -eq $targetInfo.Size) { $srcFile.SizeMatchStatus = 'YES' }
+                    elseif ($targetInfo.Size -gt $srcFile.SizeBytes) { $srcFile.SizeMatchStatus = 'CHECK' }
+                    else { $srcFile.SizeMatchStatus = 'CORRUPT' }
+                } else { $srcFile.SizeMatchStatus = $null }
+            } catch { $srcFile.SizeMatchStatus = $null }
             $srcFile.TargetModified = $targetInfo.Modified
             $srcFile.TargetOwner = $targetInfo.Owner
             if ($targetInfo.Path) {
@@ -569,6 +578,7 @@ try {
             $MatchedCount++
         } else {
             $srcFile.Exists_InTarget = $false
+            $srcFile.SizeMatchStatus = $null
         }
     }
 
@@ -622,6 +632,7 @@ try {
                 SizeBytes = $null
                 TargetSize = $null
                 SizeMatch = $null
+                SizeMatchStatus = $null
                 Modified = $null
                 TargetModified = $null
                 DateMatch = $null
@@ -716,7 +727,13 @@ try {
         @{Name='Exists_InTarget'; Expression={ if ($_.Type -eq 'folder') { $_.Exists_InTarget } else { if ($_.Exists_InTarget) { 'YES' } else { 'NO' } } }},
         @{Name='SourceSize_Bytes'; Expression={$_.SizeBytes}},
         @{Name='TargetSize_Bytes'; Expression={$_.TargetSize}},
-        @{Name='SizeMatch'; Expression={if ($_.SizeMatch -eq $true) { 'YES' } elseif ($_.SizeMatch -eq $false) { 'NO' } else { 'N/A' }}},
+        @{Name='SizeMatch'; Expression={
+            if ($_.Type -eq 'folder') { 'N/A' }
+            elseif ($_.SizeMatchStatus) { $_.SizeMatchStatus }
+            elseif ($_.SizeMatch -eq $true) { 'YES' }
+            elseif ($_.SizeMatch -eq $false) { 'NO' }
+            else { 'N/A' }
+        }},
         @{Name='SourceModified'; Expression={$_.Modified}},
         @{Name='TargetModified'; Expression={$_.TargetModified}},
         @{Name='DateMatch'; Expression={if ($_.DateMatch -eq $true) { 'YES' } elseif ($_.DateMatch -eq $false) { 'NO' } else { 'N/A' }}},
