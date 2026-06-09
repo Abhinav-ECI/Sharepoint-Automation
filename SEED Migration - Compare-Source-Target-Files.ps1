@@ -625,16 +625,15 @@ try {
     $SourceFiles | Select-Object `
         FileName,
         RelativePath,
-        @{Name='SourceSize_Bytes'; Expression={$_.SizeBytes}},
-        @{Name='SourceSize_MB'; Expression={$_.SizeMB}},
-        @{Name='SourceModified'; Expression={$_.Modified}},
-        @{Name='SourceOwner'; Expression={$_.SourceOwner}},
         @{Name='Exists_InTarget'; Expression={if ($_.Exists_InTarget) { 'YES' } else { 'NO' }}},
+        @{Name='SourceSize_Bytes'; Expression={$_.SizeBytes}},
         @{Name='TargetSize_Bytes'; Expression={$_.TargetSize}},
-        @{Name='TargetOwner'; Expression={$_.TargetOwner}},
         @{Name='SizeMatch'; Expression={if ($_.SizeMatch -eq $true) { 'YES' } elseif ($_.SizeMatch -eq $false) { 'NO' } else { 'N/A' }}},
+        @{Name='SourceModified'; Expression={$_.Modified}},
         @{Name='TargetModified'; Expression={$_.TargetModified}},
         @{Name='DateMatch'; Expression={if ($_.DateMatch -eq $true) { 'YES' } elseif ($_.DateMatch -eq $false) { 'NO' } else { 'N/A' }}},
+        @{Name='SourceOwner'; Expression={$_.SourceOwner}},
+        @{Name='TargetOwner'; Expression={$_.TargetOwner}},
         @{Name='OwnerMatch'; Expression={if ($_.OwnerMatch -eq $true) { 'YES' } elseif ($_.OwnerMatch -eq $false) { 'NO' } else { 'N/A' }}} |
         Export-Csv -Path $ExportPath -NoTypeInformation -Encoding UTF8
     
