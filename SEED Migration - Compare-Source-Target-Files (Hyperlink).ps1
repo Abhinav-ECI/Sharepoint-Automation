@@ -131,7 +131,23 @@ function Get-PartitionId {
 }
 
 if ([string]::IsNullOrWhiteSpace($SourcePath)) {
-    $SourcePath = Read-Host "Enter local source folder path"
+    # Try to use a Windows Forms folder-picker dialog; fall back to Read-Host if unavailable.
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
+        $folderDialog.Description = "Select local source folder"
+        $folderDialog.ShowNewFolderButton = $true
+        $dialogResult = $folderDialog.ShowDialog()
+        if ($dialogResult -eq [System.Windows.Forms.DialogResult]::OK) {
+            $SourcePath = $folderDialog.SelectedPath
+        } else {
+            # User cancelled the dialog; fall back to prompt
+            $SourcePath = Read-Host "Enter local source folder path"
+        }
+    } catch {
+        # Non-GUI host or other error — fall back to text prompt
+        $SourcePath = Read-Host "Enter local source folder path"
+    }
 }
 $SourcePath = $SourcePath.Trim('"').Trim("'").Trim()
 
