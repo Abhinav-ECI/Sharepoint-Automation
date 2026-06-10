@@ -33,9 +33,6 @@ if ($PSVersion -gt 5) {
 }
 
 Write-Host "PowerShell version: $PSVersion (Windows PowerShell)" -ForegroundColor Green
-
-# Record script start time for elapsed-time reporting
-$ScriptStartTime = Get-Date
 # ============================================================
 # HELPER - Extract path from SharePoint hyperlink
 # ============================================================
@@ -294,6 +291,8 @@ Write-Host "Connecting to SharePoint..." -ForegroundColor Cyan
 try {
     $Conn = Connect-PnPOnline -Url $SiteUrl -UseWebLogin -ReturnConnection -WarningAction SilentlyContinue -ErrorAction Stop
     Write-Host "Connected OK" -ForegroundColor Green
+        # Start timer now that SharePoint connection has been established
+        $ScriptStartTime = Get-Date
 } catch {
     Write-Host "ERROR: Failed to connect: $_" -ForegroundColor Red
     exit 1
@@ -343,9 +342,10 @@ try {
             RelativePath = $relPath
             SourcePath = $file.FullName
             FullPath = $file.FullName
-            SizeBytes = $file.Length
-            SizeMB = [math]::Round($file.Length / 1MB, 2)
-            Modified = $file.LastWriteTime
+                SizeBytes = $file.Length
+                SizeMB = [math]::Round($file.Length / 1MB, 2)
+                # Store source modified time as UTC DateTime
+                Modified = $file.LastWriteTime.ToUniversalTime()
             SourceOwner = $owner
             Exists_InTarget = $null
             TargetSize = $null
@@ -450,7 +450,8 @@ try {
                 RelativePath = $relNorm
                 Name = $item["FileLeafRef"]
                 Size = ([int64]($item["File_x0020_Size"] -as [int64]))
-                Modified = ($item["Modified"] -as [datetime]).ToString('o')
+                # Store target modified as UTC ISO string
+                Modified = ($item["Modified"] -as [datetime]).ToUniversalTime().ToString('o')
                 Path = $item["FileRef"]
                 Owner = $ownerName
             }
@@ -572,7 +573,8 @@ try {
             $srcFile.OwnerMatch = Test-OwnerMatch -SourceOwner $srcFile.SourceOwner -TargetOwner $targetInfo.Owner
             if ($targetInfo.Modified) {
                 $timeDiff = [Math]::Abs(($srcFile.Modified - $targetInfo.Modified).TotalSeconds)
-                $srcFile.DateMatch = ($timeDiff -le 2)
+                # Use 5 second tolerance for cross-system clock skew
+                $srcFile.DateMatch = ($timeDiff -le 5)
             }
             $map.Remove($srcRelNorm) | Out-Null
             $MatchedCount++
@@ -734,8 +736,8 @@ try {
             elseif ($_.SizeMatch -eq $false) { 'NO' }
             else { 'N/A' }
         }},
-        @{Name='SourceModified'; Expression={$_.Modified}},
-        @{Name='TargetModified'; Expression={$_.TargetModified}},
+        @{Name='SourceModified'; Expression={ if ($_.Modified) { ($_.Modified.ToUniversalTime()).ToString('o') } else { '' } }},
+        @{Name='TargetModified'; Expression={ if ($_.TargetModified) { ($_.TargetModified.ToUniversalTime()).ToString('o') } else { '' } }},
         @{Name='DateMatch'; Expression={if ($_.DateMatch -eq $true) { 'YES' } elseif ($_.DateMatch -eq $false) { 'NO' } else { 'N/A' }}},
         @{Name='SourceOwner'; Expression={$_.SourceOwner}},
         @{Name='TargetOwner'; Expression={$_.TargetOwner}},
