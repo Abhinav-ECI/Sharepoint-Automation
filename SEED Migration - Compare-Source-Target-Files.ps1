@@ -618,6 +618,62 @@ try {
                 if ($totalFiles -eq 0) { continue }
                 $missing = @($filesInFolder | Where-Object { ($_.Type -eq 'file') -and ($_.Exists_InTarget -ne $true) }).Count
 
+                # Compute source folder aggregated size (direct children only)
+                $sourceFolderSize = 0
+                try { $sourceFolderSize = [int64](($filesInFolder | Measure-Object -Property SizeBytes -Sum).Sum) } catch { $sourceFolderSize = 0 }
+
+                # Compute latest source modified (most recent file modified)
+                $sourceLatest = $null
+                try { $sourceLatest = ($filesInFolder | Where-Object { $_.Modified } | Sort-Object Modified -Descending | Select-Object -First 1).Modified } catch { $sourceLatest = $null }
+
+                # Source folder owner (from filesystem)
+                $folderOwner = $null
+                try { $folderOwner = (Get-Acl $dir.FullName -ErrorAction Stop).Owner } catch { $folderOwner = $null }
+
+                # Compute target folder aggregated size, latest modified, and owner from matched target file info
+                $targetFolderSize = 0
+                $targetLatest = $null
+                $targetOwners = @()
+                foreach ($f in $filesInFolder) {
+                    if ($f.TargetSize -and ($f.TargetSize -as [int64])) { $targetFolderSize += [int64]$f.TargetSize }
+                    if ($f.TargetOwner) { $targetOwners += $f.TargetOwner }
+                    if ($f.TargetModified) {
+                        if (-not $targetLatest) { $targetLatest = $f.TargetModified } elseif ($f.TargetModified -gt $targetLatest) { $targetLatest = $f.TargetModified }
+                    }
+                }
+
+                # Determine most common non-empty target owner
+                $targetFolderOwner = $null
+                try {
+                    $group = $targetOwners | Where-Object { $_ } | Group-Object | Sort-Object Count -Descending | Select-Object -First 1
+                    if ($group) { $targetFolderOwner = $group.Name }
+                } catch { $targetFolderOwner = $null }
+
+                # Owner match using helper function
+                $ownerMatch = $false
+                try { $ownerMatch = Test-OwnerMatch -SourceOwner $folderOwner -TargetOwner $targetFolderOwner } catch { $ownerMatch = $false }
+
+                # Size match and human-friendly status
+                $sizeMatch = $null
+                $sizeMatchStatus = $null
+                try {
+                    if ($null -ne $sourceFolderSize -and $null -ne $targetFolderSize) {
+                        $sizeMatch = ($sourceFolderSize -eq $targetFolderSize)
+                        if ($sizeMatch) { $sizeMatchStatus = 'YES' }
+                        elseif ($targetFolderSize -gt $sourceFolderSize) { $sizeMatchStatus = 'CHECK' }
+                        else { $sizeMatchStatus = 'CORRUPT' }
+                    }
+                } catch { $sizeMatch = $null; $sizeMatchStatus = $null }
+
+                # Date match (compare latest modified timestamps within 5 seconds tolerance)
+                $dateMatch = $null
+                try {
+                    if ($sourceLatest -and $targetLatest) {
+                        $timeDiff = [Math]::Abs(($sourceLatest - $targetLatest).TotalSeconds)
+                        $dateMatch = ($timeDiff -le 5)
+                    }
+                } catch { $dateMatch = $null }
+
             if ($missing -eq 0) { $status = 'Migrated' } else { $status = "Failed - $missing" }
 
             $destUrl = "$($siteUri.Scheme)://$($siteUri.Host)$baseServer"
@@ -631,16 +687,16 @@ try {
                 FullPath = $dir.FullName
                 DestinationPath = $destUrl
                 Exists_InTarget = $status
-                SizeBytes = $null
-                TargetSize = $null
-                SizeMatch = $null
-                SizeMatchStatus = $null
-                Modified = $null
-                TargetModified = $null
-                DateMatch = $null
-                SourceOwner = $null
-                TargetOwner = $null
-                OwnerMatch = $null
+                SizeBytes = $sourceFolderSize
+                TargetSize = $targetFolderSize
+                SizeMatch = $sizeMatch
+                SizeMatchStatus = $sizeMatchStatus
+                Modified = $sourceLatest
+                TargetModified = $targetLatest
+                DateMatch = $dateMatch
+                SourceOwner = $folderOwner
+                TargetOwner = $targetFolderOwner
+                OwnerMatch = $ownerMatch
             }
 
             $SourceFiles += $folderRec
@@ -730,8 +786,9 @@ try {
         @{Name='SourceSize_Bytes'; Expression={$_.SizeBytes}},
         @{Name='TargetSize_Bytes'; Expression={$_.TargetSize}},
         @{Name='SizeMatch'; Expression={
-            if ($_.Type -eq 'folder') { 'N/A' }
-            elseif ($_.SizeMatchStatus) { $_.SizeMatchStatus }
+            if ($_.Type -eq 'folder') {
+                if ($_.SizeMatchStatus) { $_.SizeMatchStatus } elseif ($_.SizeMatch -eq $true) { 'YES' } elseif ($_.SizeMatch -eq $false) { 'NO' } else { 'N/A' }
+            } elseif ($_.SizeMatchStatus) { $_.SizeMatchStatus }
             elseif ($_.SizeMatch -eq $true) { 'YES' }
             elseif ($_.SizeMatch -eq $false) { 'NO' }
             else { 'N/A' }
